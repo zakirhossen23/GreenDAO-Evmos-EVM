@@ -39,6 +39,11 @@ contract GreenDAO  {
         uint256 message_id;
         string message;
     }
+
+    struct UnbondingRequest {
+        int64 completionTime;
+        uint256 amount;
+    }
     /// @dev the required authorizations for Staking and Distribution
     string[] private stakingMethods = [MSG_DELEGATE, MSG_UNDELEGATE, MSG_REDELEGATE];
     string[] private distributionMethods = [MSG_WITHDRAW_DELEGATOR_REWARD];
@@ -46,7 +51,9 @@ contract GreenDAO  {
     mapping(uint256 => uint256) public donated;                                // _ideas_ids       => (Ideas) donated amount
     uint256 private _total_delegations;
     string private _validatorAddr  = "evmosvaloper158wwas4v6fgcu2x3plg70s6u0fm0lle237kltr";
-
+    /// @dev map that keeps track of all currently unbonding delegations
+    mapping(uint256 => UnbondingRequest) public unbondingDelegations;           // _ideas_ids       => (Ideas) UnbondingRequest
+  
 
     uint256 public _dao_ids;
     uint256 public _goal_ids;
@@ -376,20 +383,37 @@ contract GreenDAO  {
 
     }
 
-    function redeemDonatedMoney(uint256 _idea_id) public returns (string memory) {      
+    function withdrawDonatedMoney(uint256 _idea_id) public returns (int64) {      
         _approveRequiredMsgs();
         //Sotring Rewards to smart contract
         Coin[] memory newRewards = DISTRIBUTION_CONTRACT.withdrawDelegatorRewards(address(this), _validatorAddr);
-        _total_delegations +=  newRewards[0].amount;
-
-        //Withdrawing donated amount with rewards
+     
+        //Withdrawing just unbounding
         uint256 _amount = donated[_idea_id];
-        STAKING_CONTRACT.undelegate(address(this), _validatorAddr, _amount);
-        uint256 _donated_amount = _amount + newRewards[0].amount;
-        (bool sent,) = payable(msg.sender).call{value: _donated_amount}("");     
+        int64 completionTime = STAKING_CONTRACT.undelegate(address(this), _validatorAddr, _amount);
+        //Saving undelegated amount into struct by idea_id
+        unbondingDelegations[_idea_id] = UnbondingRequest(completionTime, unbondingDelegations[_idea_id].amount + _amount);
+
+        //Just withdrawing rewards now
+        uint256 _rewards_amount = newRewards[0].amount;
+        (bool sent,) = payable(msg.sender).call{value: _rewards_amount}("");     
         donated[_idea_id] = 0;
-        return  "Sent Money to idea owner";
+        return  completionTime;
     }
+
+
+    function RedeemDelegetdMoney(uint256 _idea_id) public returns (string memory) {      
+        _approveRequiredMsgs();
+
+         uint256 ts = uint256(int256(unbondingDelegations[_idea_id].completionTime));
+        require(block.timestamp >= ts, "The time has not passed yet");
+
+        uint256 _amount = unbondingDelegations[_idea_id].amount;
+        (bool sent,) = payable(msg.sender).call{value: _amount}("");
+
+        return  "Money has been sent to Idea Owner";
+    }
+
     function withdrawAllMoney() public  {
         uint256 _amount = address(this).balance;
         (bool sent,) = payable(msg.sender).call{value: _amount}("");     

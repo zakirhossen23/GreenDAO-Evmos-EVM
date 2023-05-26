@@ -5,7 +5,7 @@ import NavLink from "next/link";
 import SlideShow from "../../../../../components/components/Slideshow";
 import useContract from "../../../../../services/useContract";
 import { ControlsChevronLeft } from "@heathmont/moon-icons-tw";
-
+import {useSnackbar} from 'notistack';
 import UseFormTextArea from "../../../../../components/components/UseFormTextArea";
 import isServer from "../../../../../components/isServer";
 import DonateCoin from "../../../../../components/components/modal/DonateCoin";
@@ -18,9 +18,11 @@ let IdeasWaiting = false;
 let running = true;
 export default function GrantIdeas() {
 	//variables
+	const { enqueueSnackbar } = useSnackbar();
+
 	const [ideaId, setIdeasId] = useState(-1);
 	const [imageList, setimageList] = useState([]);
-	const [IdeasURI, setIdeasURI] = useState({ ideasId: "", Title: "", Description: "", wallet: "", logo: "", End_Date: "", voted: 0, isVoted: true,isOwner:true, allfiles: [] });
+	const [IdeasURI, setIdeasURI] = useState({ ideasId: "", Title: "", Description: "", wallet: "", logo: "", End_Date: "", voted: 0,delegAmount:0,delegDated:"", isVoted: true, isOwner: true, allfiles: [] });
 	const [DonatemodalShow, setDonatemodalShow] = useState(false);
 	const [AccountAddress, setAccountAddress] = useState("");
 	const { contract, signerAddress, sendTransaction } = useContract();
@@ -57,9 +59,15 @@ export default function GrantIdeas() {
 	let m;
 	let id = ""; //Ideas id from url
 	let Goalid = ""; //Goal id
-	function LeftDate(datetext) {
+	function diff(datetext) {
+		var c = new Date(datetext).getTime();
+		var n = new Date().getTime();
+		var d = c - n;
+		return d;
+	}
+	function LeftDate(datetext, int= false) {
 		//String date to dd/hh/mm/ss format
-
+		if (int) datetext = Number(datetext);
 		var c = new Date(datetext).getTime();
 		var n = new Date().getTime();
 		var d = c - n;
@@ -128,7 +136,8 @@ export default function GrantIdeas() {
 					if (element === signerAddress) isvoted = true;
 				}
 				setAccountAddress(object.properties.wallet.description);
-
+				const delegation =  await contract.unbondingDelegations(Number(id)).call();
+			
 				setIdeasURI({
 					ideasId: id,
 					Title: object.properties.Title.description,
@@ -137,7 +146,10 @@ export default function GrantIdeas() {
 					logo: object.properties.logo.description.url,
 					End_Date: goalURI.properties.End_Date?.description,
 					voted: Object.keys(Allvotes).length,
-					donation: Number((await contract._ideas_uris(Number(id)).call()).donation) / 10 ** 6,
+					donation: Number((await contract._ideas_uris(Number(id)).call()).donation) / 1e18,
+					available: Number((await contract.donated(Number(id)).call())) / 1e18,
+					delegAmount: Number(delegation.amount) / 1e18,
+					delegDated: (Number( delegation.completionTime )* 1000),
 					isVoted: isvoted,
 					isOwner: object.properties.wallet.description.toString().toLocaleLowerCase() === signerAddress.toString().toLocaleLowerCase() ? true : false,
 					allfiles: object.properties.allFiles
@@ -207,7 +219,9 @@ export default function GrantIdeas() {
 			var allDates = document.getElementsByName("dateleft");
 			for (let i = 0; i < allDates.length; i++) {
 				var date = allDates[i].getAttribute("date");
-				allDates[i].innerHTML = LeftDate(date);
+				var inttype = allDates[i].getAttribute("inttype");
+				if (inttype != undefined) {inttype=true;}else{inttype = false;}
+				allDates[i].innerHTML = LeftDate(date,inttype);
 			}
 			var allDates = document.getElementsByName("date");
 			for (let i = 0; i < allDates.length; i++) {
@@ -228,6 +242,39 @@ export default function GrantIdeas() {
 		}
 		window.location.reload();
 	}
+
+	async function WithdrawDonation() {
+		try {
+			await sendTransaction(contract.withdrawDonatedMoney(Number(id)));
+			const delegation =  await contract.unbondingDelegations(Number(id)).call();
+			var c = new Date( Number( delegation.completionTime )* 1000).getTime();
+			var n = new Date().getTime();
+			var d = c - n;
+			let da = Math.floor(d / (1000 * 60 * 60 * 24))
+			enqueueSnackbar(`You can claim donated amount after ${da} days`, { variant: "success" })
+			await sleep(800);
+			
+		} catch (error) {
+			console.error(error);
+			return;
+		}
+		window.location.reload();
+
+	}
+	async function ClaimDelegatedAmount() {
+		try {
+			await sendTransaction(contract.RedeemDelegetdMoney(Number(id)));
+			enqueueSnackbar("Success!", { variant: "success" })
+			await sleep(800);
+			
+		} catch (error) {
+			console.error(error);
+			return;
+		}
+		window.location.reload();
+
+	}
+
 
 	async function DonateToAddress() {
 		setDonatemodalShow(true);
@@ -321,7 +368,7 @@ export default function GrantIdeas() {
 					<div>
 						<Loader
 							element={
-								<a className="font-medium text-[#0000ff]" href={`https://testnet.escan.live/address/${IdeasURI.wallet}`} style={{color:"var(--title-a-text)"}}  rel="noreferrer" target="_blank">
+								<a className="font-medium text-[#0000ff]" href={`https://testnet.escan.live/address/${IdeasURI.wallet}`} style={{ color: "var(--title-a-text)" }} rel="noreferrer" target="_blank">
 									{IdeasURI.wallet}
 								</a>
 							}
@@ -330,7 +377,7 @@ export default function GrantIdeas() {
 					</div>
 					<Loader
 						element={
-							<a className="text-piccolo" style={{'color':"white"}} name="dateleft" date={IdeasURI.End_Date}>
+							<a className="text-piccolo" style={{ 'color': "white" }} name="dateleft" date={IdeasURI.End_Date}>
 								{LeftDate(IdeasURI.End_Date)}
 							</a>
 						}
@@ -338,43 +385,76 @@ export default function GrantIdeas() {
 					/>
 
 					<Loader element={<div className="flex">Voted: {IdeasURI.voted} </div>} width={"100%"} />
-					<Loader element={<div className="flex">Donated: {IdeasURI.donation} </div>} width={"100%"} />
+					<Loader element={<div className="flex">Donated: {IdeasURI.donation} tEVMOS </div>} width={"100%"} />
+					{IdeasURI.isOwner ? (<>
+						<Loader element={<div className="flex">Donation available for withdrawal: {IdeasURI.available} tEVMOS </div>} width={"100%"} />
+						{(IdeasURI.delegAmount != 0)?(<>
+							<Loader element={<div className="flex">Donation available for redeem: {IdeasURI.delegAmount} tEVMOS </div>} width={"100%"} />
+							<Loader element={<div className="flex">Redeemable Date:&ensp;
+							<span name="dateleft" inttype="true" date={IdeasURI.delegDated }>
+								{LeftDate(IdeasURI.delegDated)}
+							</span> </div>} width={"100%"} />
+						</>):(<></>)}
+					</>) : (<></>)}
 					<Loader element={<p>{IdeasURI.Description} </p>} width={"100%"} />
 				</div>
 				<div className={`${styles.tabtitle} flex gap-4 justify-start`}>
-					<a className={`tab block cursor-pointer py-2 text-3xl text-[#0000ff]`}  style={{color:"var(--title-a-text)"}}>Ideas</a>
-					{!IdeasURI.isOwner?(<>
+					<a className={`tab block cursor-pointer py-2 text-3xl text-[#0000ff]`} style={{ color: "var(--title-a-text)" }}>Ideas</a>
+					{!IdeasURI.isOwner ? (<>
 						<div className="flex justify-end w-full gap-4">
-						{!IdeasURI.isVoted ? (
-							<>
-								<Button
-									data-element-id="btn_vote"
-									style={{ width: "135px" }}
-									data-analytic-event-listener="true"
-									onClick={() => {
-										VoteIdees();
-									}}
-								>
-									Vote
-								</Button>
-							</>
-						) : (
-							<></>
-						)}
+							{!IdeasURI.isVoted ? (
+								<>
+									<Button
+										data-element-id="btn_vote"
+										style={{ width: "135px" }}
+										data-analytic-event-listener="true"
+										onClick={() => {
+											VoteIdees();
+										}}
+									>
+										Vote
+									</Button>
+								</>
+							) : (
+								<></>
+							)}
 
+							<Button
+								data-element-id="btn_donate"
+								style={{ width: "135px" }}
+								data-analytic-event-listener="true"
+								onClick={() => {
+									DonateToAddress();
+								}}
+							>
+								Donate
+							</Button>
+						</div>
+					</>) : (<>{(IdeasURI.available > 0) ? (<>
 						<Button
 							data-element-id="btn_donate"
 							style={{ width: "135px" }}
 							data-analytic-event-listener="true"
 							onClick={() => {
-								DonateToAddress();
+								WithdrawDonation();
 							}}
 						>
-							Donate
+							Withdraw
+						</Button></>) : (<></>)} { diff(IdeasURI.delegDated) <= 0?(<>
+							<Button
+							data-element-id="btn_donate"
+							style={{ width: "135px" }}
+							data-analytic-event-listener="true"
+							onClick={() => {
+								ClaimDelegatedAmount();
+							}}
+						>
+							Redeem {IdeasURI.delegAmount} tEVMOS
 						</Button>
-					</div>
-					</>):(<></>)}
-					
+						</>):(<></>)}
+
+					</>)}
+
 				</div>
 				<div className={styles.divider}></div>
 				<>
